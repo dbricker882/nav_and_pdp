@@ -18,16 +18,16 @@ library(tidyverse)
 library(janitor)
 library(lubridate)
 library(scales)
-library(readxl)
-library(RSQLite)
+# library(readxl)
+# library(RSQLite)
 #library(rJava)
 #library(RJDBC)
-library(data.table)
-library(prophet)
-#library(kableExtra)
-library(rstatix)
-library(BSDA)
-library(effectsize)
+# library(data.table)
+# library(prophet)
+# #library(kableExtra)
+# library(rstatix)
+# library(BSDA)
+# library(effectsize)
 
 ###################################################################################
 # Set Plot Theme
@@ -58,7 +58,7 @@ vf_theme <- theme(
   axis.text = element_text(color = "#004C97"),
   axis.line = element_line(color = "#004C97"),
   panel.grid.minor = element_blank(),
-  panel.grid.major = element_line(color = "#9BB8D3", linewidth = .001),
+  panel.grid.major = element_line(color = "#9BB8D3", size = .001),
   panel.background = element_rect(fill = "#ffffff", color = "#ffffff"),
   legend.position = "bottom",
   legend.text = element_text(color = "#004C97"),
@@ -192,143 +192,34 @@ scale_fill_vf <- function(
 #     project = "bigquery-tbl-us",
 #     dataset = "analytics_254489026")
 
-vans_con <- dbConnect(
-  bigrquery::bigquery(),
-  project = "vans-family-app-us---prod",
-  dataset = "analytics_253994679"
-)
+# vans_con <- dbConnect(
+#   bigrquery::bigquery(),
+#   project = "vans-family-app-us---prod",
+#   dataset = "analytics_253994679"
+# )
 ```
 
 # Query/Read In Data - Cart Order Summary TBL
 
 ```{r}
-setwd(
-  "C:/Users/DBRICK1/OneDrive - VFC Corp/projects/David Bricker/2025_projects/ascent_testing_2025/vans1_nav_and_pdp")
+# Required libraries and Read in Data
 
-# LaunchDarkly Example Query
+library(tidyverse)
+library(janitor)
+library(lubridate)
+library(scales)
 
-vans1 <- dbGetQuery(
-  vans_con,
-  "
-with exp_group as
-(
-  SELECT
-   date
-  , device
-  , hostname
-  , session_id
-  , launchdarkly_names
-  , experiment_values
-  FROM
-  (
-    select
-    PARSE_DATE('%Y%m%d', cast(event_date as string)) as date
-    , device.category as device
-    , device.web_info.hostname as hostname
-    , CONCAT(user_pseudo_id, (SELECT value.int_value FROM UNNEST(event_params) WHERE KEY = 'ga_session_id')) AS session_id
-    , user_pseudo_id
-    , (SELECT value.string_value FROM UNNEST(event_params) WHERE KEY = 'edgeworker_key') AS launchdarkly_names
-    , (SELECT value.string_value FROM UNNEST(event_params) WHERE KEY = 'edgeworker_value') AS experiment_values
-    , row_number() over(partition by CONCAT(user_pseudo_id, (SELECT value.int_value FROM UNNEST(event_params) WHERE KEY = 'ga_session_id')) order by event_timestamp asc) as rk
-    from `vans-family-app-us---prod.analytics_253994679.events_*`
-    where 1=1
-    and _TABLE_SUFFIX BETWEEN '20250805' and '20250821'
-    AND event_name = 'launchdarkly'
-    AND contains_substr((SELECT value.string_value FROM UNNEST(event_params) WHERE KEY = 'edgeworker_key') , 'tempVansNewNav')
-    AND device.category = 'mobile'
-  )
-  where rk = 1
-)
-, performance as 
-(
-  select 
-  PARSE_DATE('%Y%m%d', cast(event_date as string)) as date
-  , device.category as device
-  , CONCAT(user_pseudo_id, (SELECT value.int_value FROM UNNEST(event_params) WHERE KEY = 'ga_session_id')) AS session_id
-  , session_traffic_source_last_click.cross_channel_campaign.primary_channel_group as channel
-  , MAX(TIMESTAMP_MICROS(event_timestamp)) AS end_time
-  , MIN(TIMESTAMP_MICROS(event_timestamp)) AS start_time
-  , COUNT(DISTINCT (SELECT value.string_value FROM UNNEST(event_params) WHERE KEY = 'page_location')) AS page_views
-  , max(case when privacy_info.analytics_storage = 'Yes' then 1 else 0 end) as tracking_consent 
-  , max((select value.int_value from unnest(event_params) where key = 'ga_session_number')) as session_num
-  , sum(case when event_name in ('navigation_global_header_nav', 'navigation_mobile_hamburger_menu', 'navigation_mobile_mega_menu') then 1 else 0 end) as nav_clicks
-  , sum(case when event_name = 'page_view' and (select value.string_value from unnest(event_params) where key = 'page_category') = 'PLP' then 1 else 0 end) as plp_flag
-  , sum(case when event_name = 'page_view' and (select value.string_value from unnest(event_params) where key = 'page_category') = 'PDP' then 1 else 0 end) as pdp_flag
-  , count(distinct case when event_name = 'purchase' then ecommerce.transaction_id else null end) as purchase
-  , sum(case when event_name = 'purchase' then ecommerce.total_item_quantity else 0 end) as quantity
-  , sum(case when event_name = 'purchase' then ecommerce.purchase_revenue_in_usd else 0 end) as revenue
-  , SUM(case when event_name = 'add_to_cart' then 1 else 0 end) as add_to_cart
-  from `vans-family-app-us---prod.analytics_253994679.events_*`
-  where 1=1
-  and _TABLE_SUFFIX BETWEEN '20250805' and '20250821'
-  and device.category = 'mobile'
-  group by 1,2,3,4
-)
-,lp_data AS
-(
-  SELECT 
-  PARSE_DATE('%Y%m%d', cast(event_date as string)) as date
-  , concat(user_pseudo_id,(SELECT value.int_value FROM UNNEST(event_params) WHERE KEY = 'ga_session_id')) AS session_id
-  , (SELECT value.string_value FROM UNNEST(event_params) WHERE KEY = 'page_category') AS landing_page_cat
-  from `vans-family-app-us---prod.analytics_253994679.events_*`
-  where 1=1
-  and _TABLE_SUFFIX BETWEEN '20250805' and '20250821'
-  and device.category = 'mobile'
-  AND event_name = 'session_start' 
-)
-select
-g.date
-, p.tracking_consent
-, p.channel
-, landing_page_cat
-, g.device
-, g.session_id
-, names
-, exp_values
-, max(session_num) as session_num
-, max(nav_clicks) as nav_clicks
-, max(plp_flag) as plp_flag
-, max(pdp_flag) as pdp_flag
-, max(p.purchase) as purchase
-, max(p.quantity) as quantity
-, max(p.revenue) as revenue
-, max(p.add_to_cart) as add_to_cart
-, max(CASE WHEN TIMESTAMP_DIFF(end_time, start_time, SECOND) < 10 AND page_views <= 1 THEN 1 ELSE 0 END) AS bounced_flag
-from exp_group g
-, unnest(split(launchdarkly_names, ',')) as names with offset as nameindex
-, unnest(split(experiment_values, ',')) as exp_values with offset as expindex
-left join performance p
-  on g.session_id = p.session_id
-  and g.date = p.date
-left join lp_data lp
-  on g.session_id = lp.session_id
-  and g.date = lp.date
-where names = 'tempVansNewNav'
-and nameindex = expindex
-group by 1,2,3,4,5,6,7,8
-"
-)
+vans1 <- read.csv("C:/Users/brick/Documents/saga/blog/nav_and_pdp/cleaned.csv")
 
-
- write.csv(vans1, "vans1.csv")
-
-# Read in data if previously saved.
-# vans_qs_df <- read.csv("C:/Users/DBRICK1/OneDrive - VFC Corp/projects/David Bricker/2025_projects/ascent_testing_2025/159vans_express_pay_in_quickshop/vans_qs_df.csv", colClasses = c("session_id" = "character"))
 
 ```
 
 # Nav and PDP Data Cleaning
 ```{r}
-
-vans1_df <- vans1 |>
+# Clean up some ambiguous variables and filter out sessions that opted out of tracking
+cleaned_df <- vans1 |>
   filter(!is.na(session_id)) |>
-  rename(test_group = exp_values) |>
   mutate(
-    test_group = case_when(
-      test_group == "true" ~ "Test",
-      test_group == "false" ~ "Control",
-      TRUE ~ "NA"
-    ),
     device = case_when(device == "desktop" ~ "Desktop", TRUE ~ "Mobile"),
     new_returning = case_when(session_num > 1 ~ "Returning", TRUE ~ "New"),
     nav_flag = case_when(
@@ -669,10 +560,7 @@ final_desc
 ```{r}
 # Check distribution of channels and landing page categories
 
-vans1_df|>
-  filter(tracking_consent == 1) |>
-  # filter(landing_page_cat %in% c("PDP", "PLP", "Home", "Content" ,"Search", "Error Page", "My Account", "Order Status" ,"Cart", "NA"),
-         # channel != "Mobile Push Notifications") |> 
+cleaned_df|>
   group_by(test_group,
            channel,
            landing_page_cat) |>
@@ -690,41 +578,32 @@ vans1_df|>
        y = "Sessions",
        fill = NULL)
 
-# Create data fram with total counts of sessions for each landing page 
-# category by test group and a column with the minumum number of sessions
-# for each landing page category between test and control.
+# Create data frame with total counts of sessions for each channel-landing page category by test group. 
+# Add a column with the minimum number of sessions for each landing page category between test and control. Finally filter out any categories with
+# 0 sessions in one group
 
-sessions <- vans1_df |>
-  # filter(landing_page_cat %in% c("PDP", "PLP", "Home", "Content" ,"Search", "Error Page", "My Account", "Order Status" ,"Cart", "NA"),
-  #        channel %in% c("Affiliates", "Direct", "Email", "Organic Social", "ORganic Search", "Organic Shopping", "Paid Search", "Paid Shopping", "Paid Social")) |> 
+sessions <- cleaned_df |>
   group_by(test_group, 
            channel,
            landing_page_cat) |>
   summarize(
-    sessions = n_distinct(session_id),
-    cvr = sum(purchase) / sessions
-  ) |>
+    sessions = n_distinct(session_id)) |>
   pivot_wider(
     id_cols =  c(landing_page_cat, channel),
     names_from = test_group,
     values_from = sessions
   ) |>
   rowwise() |>
-  mutate(percent_dif = (Test - Control) / mean(c(Test, Control))) |>
-  arrange(desc(percent_dif)) |>
-  rowwise() |>
   mutate(min = min(c(Control, Test))) |> 
   filter(!is.na(min))
 
-# Join the minimum session counts column to the original data frame
-# Resample test and control groups so that each test group/landing page 
-# combination has an equal number of observations. Equal to the minimum session
-# counts between test and control.
+# Join the minimum session counts column to the original data frame.
+# Resample test and control groups so that each channel-landing page 
+# combination has an equal number of observations between test and control.
+# Equal to the "min" column.
 
-set.seed(105)
-vans1_strat <- vans1_df |>
-  # filter(landing_page_cat %in% c("PDP", "PLP", "Home", "Content" ,"Search", "Error Page", "My Account", "Order Status" ,"Cart", "NA"),
-  #        channel %in% c("Affiliates", "Direct", "Email", "Organic Social", "ORganic Search", "Organic Shopping", "Paid Search", "Paid Shopping", "Paid Social")) |>
+
+cleaned_strat <- cleaned_df |>
   left_join(sessions |> select(landing_page_cat, channel, min), by = c("landing_page_cat", "channel")) |>
   filter(!is.na(min)) |> 
   group_by(test_group, channel, landing_page_cat) |>
@@ -735,7 +614,7 @@ vans1_strat <- vans1_df |>
 # Chart to check that session counts by landing page are equal between test
 # and control
 
-vans1_strat |>
+cleaned_strat |>
   group_by(landing_page_cat, channel, test_group) |>
   summarize(sessions = n_distinct(session_id))|> 
   ggplot(aes(reorder(landing_page_cat, sessions), sessions, fill = test_group), ) +
@@ -750,7 +629,7 @@ vans1_strat |>
 
 # Summarize test and control groups
 
-vans1_strat_summary <- vans1_strat |>
+cleaned_summary <- cleaned_strat |>
   filter(tracking_consent == 1) |>
   group_by(test_group, ) |>
   summarize(
@@ -780,7 +659,7 @@ vans1_strat_summary <- vans1_strat |>
 # Create data frame to show percent change and raw change between test and 
 # control groups for KPIs
 
-vans_change_strat <- vans1_strat_summary |>
+cleaned_change <- cleaned_summary |>
   select(
     test_group,
     cvr,
@@ -823,132 +702,132 @@ vans_change_strat <- vans1_strat_summary |>
 library(effectsize)
 # Conversion Rate
 var.test(
-  vans1_strat$purchase[vans1_strat$test_group == "Control"],
-  vans1_strat$purchase[vans1_strat$test_group == "Test"]
+  cleaned_strat$purchase[cleaned_strat$test_group == "Control"],
+  cleaned_strat$purchase[cleaned_strat$test_group == "Test"]
 )
 
-vans1_strat_cvr_test <- t.test(
+cleaned_strat_cvr_test <- t.test(
   purchase ~ test_group,
-  data = vans1_strat,
+  data = cleaned_strat,
   alternative = "two.sided",
   var.equal = FALSE,
   conf.level = 0.95
 )
 
-vans1_strat_cvr_test
+cleaned_strat_cvr_test
 
 cohens_d(purchase ~ test_group,
-           data = vans1_strat)
+           data = cleaned_strat)
 
 # Revenue Per Session
 var.test(
-  vans1_strat$revenue[vans1_strat$test_group == "Control"],
-  vans1_strat$revenue[vans1_strat$test_group == "Test"]
+  cleaned_strat$revenue[cleaned_strat$test_group == "Control"],
+  cleaned_strat$revenue[cleaned_strat$test_group == "Test"]
 )
 
-vans1_strat_rev_test <- t.test(
+cleaned_strat_rev_test <- t.test(
   revenue ~ test_group,
-  data = vans1_strat,
+  data = cleaned_strat,
   alternative = "two.sided",
   var.equal = TRUE,
   conf.level = 0.95
 )
 
-vans1_strat_rev_test
+cleaned_strat_rev_test
 
 cohens_d(revenue ~ test_group,
-           data = vans1_strat)
+           data = cleaned_strat)
 
 # Navigation Clicks
 var.test(
-  vans1_strat$nav_clicks[vans1_strat$test_group == "Control"],
-  vans1_strat$nav_clicks[vans1_strat$test_group == "Test"]
+  cleaned_strat$nav_clicks[cleaned_strat$test_group == "Control"],
+  cleaned_strat$nav_clicks[cleaned_strat$test_group == "Test"]
 )
 
-vans1_strat_nav_test <- t.test(
+cleaned_strat_nav_test <- t.test(
   nav_clicks ~ test_group,
-  data = vans1_strat,
+  data = cleaned_strat,
   alternative = "two.sided",
   var.equal = FALSE,
   conf.level = 0.95
 )
 
-vans1_strat_nav_test
+cleaned_strat_nav_test
 
 cohens_d(nav_clicks ~ test_group,
-           data = vans1_strat)
+           data = cleaned_strat)
 
 # Product Views
 var.test(
-  vans1_strat$pdp_flag[vans1_strat$test_group == "Control"],
-  vans1_strat$pdp_flag[vans1_strat$test_group == "Test"]
+  cleaned_strat$pdp_flag[cleaned_strat$test_group == "Control"],
+  cleaned_strat$pdp_flag[cleaned_strat$test_group == "Test"]
 )
 
-vans1_strat_pdp_test <- t.test(
+cleaned_strat_pdp_test <- t.test(
   pdp_flag ~ test_group,
-  data = vans1_strat,
+  data = cleaned_strat,
   alternative = "two.sided",
   var.equal = FALSE,
   conf.level = 0.95
 )
 
-vans1_strat_pdp_test
+cleaned_strat_pdp_test
 
 # Bounce Rate
 var.test(
-  vans1_strat$bounced_flag[vans1_strat$test_group == "Control"],
-  vans1_strat$bounced_flag[vans1_strat$test_group == "Test"]
+  cleaned_strat$bounced_flag[cleaned_strat$test_group == "Control"],
+  cleaned_strat$bounced_flag[cleaned_strat$test_group == "Test"]
 )
 
-vans1_strat_bounce_test <- t.test(
+cleaned_strat_bounce_test <- t.test(
   bounced_flag ~ test_group,
-  data = vans1_strat,
+  data = cleaned_strat,
   alternative = "two.sided",
   var.equal = FALSE,
   conf.level = 0.95
 )
 
-vans1_strat_bounce_test
+cleaned_strat_bounce_test
 
 cohens_d(bounced_flag ~ test_group,
-           data = vans1_strat)
+           data = cleaned_strat)
 
 # Add To Cart
 var.test(
-  vans1_strat$add_to_cart[vans1_strat$test_group == "Control"],
-  vans1_strat$add_to_cart[vans1_strat$test_group == "Test"]
+  cleaned_strat$add_to_cart[cleaned_strat$test_group == "Control"],
+  cleaned_strat$add_to_cart[cleaned_strat$test_group == "Test"]
 )
 
-vans1_strat_add_to_cart <- t.test(
+cleaned_strat_add_to_cart <- t.test(
   add_to_cart ~ test_group,
-  data = vans1_strat,
+  data = cleaned_strat,
   alternative = "two.sided",
   var.equal = FALSE,
   conf.level = 0.95
 )
 
-vans1_strat_add_to_cart
+cleaned_strat_add_to_cart
 
 cohens_d(add_to_cart ~ test_group,
-           data = vans1_strat)
+           data = cleaned_strat)
 ###################################################################################
 # List of p-values, Checkout order matches metric order.
 ###################################################################################
 
 x_mobile <- c(
-  vans1_strat_cvr_test$p.value,
-  vans1_strat_rev_test$p.value,
-  vans1_strat_bounce_test$p.value,
-  vans1_strat_nav_test$p.value,
-  vans1_strat_pdp_test$p.value,
-  vans1_strat_add_to_cart$p.value
+  cleaned_strat_cvr_test$p.value,
+  cleaned_strat_rev_test$p.value,
+  cleaned_strat_bounce_test$p.value,
+  cleaned_strat_nav_test$p.value,
+  cleaned_strat_pdp_test$p.value,
+  cleaned_strat_add_to_cart$p.value
 )
 ```
 
 ## Metrics Table Stratified
 
 ```{r}
-result_table_strat <- vans_change_strat |> 
+result_table_strat <- cleaned_change |> 
   filter(
     metric %in%
       c(
@@ -997,7 +876,7 @@ result_table_strat <- vans_change_strat |>
   select(-x_mobile)
 
 # Duration
-dates <- vans1_strat |>
+dates <- cleaned_strat |>
   ungroup() |> 
   summarize(
     Test_group = "Experiment Duration",
@@ -1008,7 +887,7 @@ dates <- vans1_strat |>
   )
 
 
-n_sessions <- vans1_strat |>
+n_sessions <- cleaned_strat |>
   ungroup() |> 
   mutate(Test_group = paste0(str_to_title(test_group), " Group")) |>
   group_by(Test_group) |>
@@ -1017,7 +896,7 @@ n_sessions <- vans1_strat |>
 desc_table <- rbind(n_sessions, dates)
 
 ################################################################################
-# Results Kable Table For Slide Deck
+# Results Kable Table
 ################################################################################
 
 library(kableExtra)
@@ -1040,7 +919,7 @@ final_results_strat <- kable_styling(
 final_results_strat
 
 ################################################################################
-# Description Kable Table For Slide Deck
+# Description Kable Table
 ################################################################################
 
 final_desc <- kable_styling(
@@ -1053,12 +932,11 @@ final_desc
 # Sessions with nav
 ```{r}
 
-used_nav_summary <- vans1_strat |>
+used_nav_summary <- cleaned_strat |>
   filter(nav_flag == "Used Nav", ) |>
   group_by(test_group) |>
   summarize(
     sessions = n_distinct(session_id),
-    # nav_sessions = n_distinct(session_id[nav_flag == "Used Nav"]),
     added_to_cart = sum(add_to_cart),
     purchases = sum(purchase, na.rm = TRUE),
     purchase_quantity = sum(quantity, na.rm = TRUE),
@@ -1070,7 +948,6 @@ used_nav_summary <- vans1_strat |>
   ) |>
   mutate(
     cvr = purchases / sessions,
-    # nav_sessions_prop = nav_sessions/sessions,
     atc_per_session = added_to_cart / sessions,
     aov = total_revenue / purchases,
     items_per_transaction = purchase_quantity / purchases,
@@ -1137,7 +1014,7 @@ used_nav_change <- used_nav_summary |>
 #        x = "Test Group")
 
 # Daily
-# vans1_summary |>
+# cleaned_summary |>
 #   ggplot(aes(date,
 #              cvr,
 #              color = test_group)) +
@@ -1155,7 +1032,7 @@ used_nav_change <- used_nav_summary |>
 ## T-Tests Nav Users
 
 ```{r}
-vans_nav <- vans1_strat |>
+vans_nav <- cleaned_strat |>
   filter(tracking_consent == 1, nav_flag == "Used Nav")
 
 # Conversion Rate
@@ -1353,7 +1230,7 @@ final_desc_nav
 
 # Sessions Viewing PDP
 ```{r}
-viewed_pdp_summary <- vans1_strat |>
+viewed_pdp_summary <- cleaned_strat |>
   filter(
     tracking_consent == 1,
     landing_page_cat != "PDP",
@@ -1425,7 +1302,7 @@ viewed_pdp_change <- viewed_pdp_summary |>
 
 ## T-Tests PDP Viewers
 ```{r}
-vans_pdp <- vans1_df |>
+vans_pdp <- cleaned_df |>
   filter(tracking_consent == 1, pdp_view == "Viewed PDP")
 
 # Conversion Rate
@@ -1622,7 +1499,7 @@ final_desc_pdp
 
 # Channel Summary
 ```{r}
-vans1_channel_summary <- vans1_df |>
+cleaned_channel_summary <- cleaned_df |>
   group_by(test_group) |>
   mutate(total_sessions = n_distinct(session_id)) |>
   mutate(
@@ -1684,7 +1561,7 @@ vans1_channel_summary <- vans1_df |>
     )
   )
 
-vans1_channel_summary |>
+cleaned_channel_summary |>
   filter(
     metric %in% c("Revenue/Session", "PLP Views/Session", "PDP Views/Session")
   ) |>
@@ -1697,7 +1574,7 @@ vans1_channel_summary |>
 #                                  hjust = 1,
 #                                  vjust = 1))
 
-vans1_channel_summary |>
+cleaned_channel_summary |>
   filter(metric %in% c("Conversion Rate")) |>
   ggplot(aes(channel_grouped, value, fill = test_group)) +
   geom_col(position = "dodge") +
@@ -1706,7 +1583,7 @@ vans1_channel_summary |>
   scale_fill_vf(palette = "two") +
   labs(x = "Channel", y = "Conversion Rate", fill = "Group")
 
-vans1_channel_summary |>
+cleaned_channel_summary |>
   filter(metric %in% c("channel_sessions")) |>
   ggplot(aes(channel_grouped, value, fill = test_group)) +
   geom_col(position = "dodge") +
@@ -1716,7 +1593,7 @@ vans1_channel_summary |>
   labs(x = "Channel", y = "sessions", fill = "Group")
 
 
-vans1_channel_prop_summary <- vans1_df |>
+cleaned_channel_prop_summary <- cleaned_df |>
   group_by(test_group) |>
   mutate(total_sessions = n_distinct(session_id)) |>
   mutate(
@@ -1766,7 +1643,7 @@ vans1_channel_prop_summary <- vans1_df |>
 
 
 # Percent of group sessions
-vans_channel_wide <- vans1_channel_prop_summary |>
+vans_channel_wide <- cleaned_channel_prop_summary |>
   select(test_group, channel_grouped, channel_prop) |>
   pivot_wider(
     id_cols = channel_grouped,
@@ -1776,7 +1653,7 @@ vans_channel_wide <- vans1_channel_prop_summary |>
   mutate(percent_difference = (Test - Control) / mean(c(Test, Control)))
 
 # Percent difference in session counts
-vans_channel_wide <- vans1_channel_prop_summary |>
+vans_channel_wide <- cleaned_channel_prop_summary |>
   select(test_group, channel_grouped, channel_sessions) |>
   pivot_wider(
     id_cols = channel_grouped,
@@ -1793,7 +1670,7 @@ vans_channel_wide <- vans1_channel_prop_summary |>
 
 # Landing Page Summary
 ```{r}
-vans1_lp_summary <- vans1_df |>
+cleaned_lp_summary <- cleaned_df |>
   mutate(
     pdp_visit = case_when(
       pdp_flag >= 1 ~ "Viewed PDP",
@@ -1841,7 +1718,7 @@ vans1_lp_summary <- vans1_df |>
     )
   )
 
-# vans1_lp_summary |>
+# cleaned_lp_summary |>
 #   filter(metric %in% c("Revenue/Session", "PLP Views/Session", "PDP Views/Session")) |>
 #   ggplot(aes(landing_page_cat,
 #              value,
@@ -1857,7 +1734,7 @@ vans1_lp_summary <- vans1_df |>
 #                                  hjust = 1,
 #                                  vjust = 1))
 
-vans1_lp_summary |>
+cleaned_lp_summary |>
   filter(metric %in% c("Conversion Rate")) |>
   ggplot(aes(landing_page_cat, value, fill = test_group)) +
   geom_col(position = "dodge") +
@@ -1867,7 +1744,7 @@ vans1_lp_summary |>
   scale_fill_vf(palette = "two") +
   labs(x = "landing page", y = "Conversion Rate", fill = "Group")
 
-vans1_lp_summary |>
+cleaned_lp_summary |>
   filter(metric %in% c("lp_sessions"), channel == "Direct") |>
   ggplot(aes(landing_page_cat, value, fill = test_group)) +
   geom_col(position = "dodge") +
@@ -1880,7 +1757,7 @@ vans1_lp_summary |>
 
 #########################
 
-vans1_lp_prop_summary <- vans1_df |>
+cleaned_lp_prop_summary <- cleaned_df |>
   mutate(
     pdp_visit = case_when(
       pdp_flag >= 1 ~ "Viewed PDP",
@@ -1913,7 +1790,7 @@ vans1_lp_prop_summary <- vans1_df |>
     pdps_per_session = pdp_views / lp_sessions
   )
 
-vans1_lp_prop_summary |>
+cleaned_lp_prop_summary |>
   ggplot(aes(landing_page_cat, lp_prop, fill = test_group)) +
   geom_col(position = "dodge") +
   # facet_grid(cols = vars(new_returning),
@@ -1966,21 +1843,21 @@ tnf_backpack_plp_summary_user <- tnf_backpack_plp |>
 ```{r}
 # test, control and combined lists
 
-test_mobile <- vans1_strat |>
+test_mobile <- cleaned_strat |>
   filter(test_group == "Test") |>
   select(revenue) |>
   as.list()
 
 test_mobile <- test_mobile[["revenue"]]
 
-control_mobile <- vans1_strat |>
+control_mobile <- cleaned_strat |>
   filter(test_group == "Control") |>
   select(revenue) |>
   as.list()
 
 control_mobile <- control_mobile[["revenue"]]
 
-combined_mobile <- vans1_strat |>
+combined_mobile <- cleaned_strat |>
   select(revenue) |>
   as.list()
 
@@ -2114,7 +1991,7 @@ bootstrap_df |>
   ) +
   labs(
     title = "Difference in Mean Revenue Per Session",
-    subtitle = "Test - Control\n1000 Trials",
+    subtitle = "Test - Control/n1000 Trials",
     y = "Frequency",
     x = "Difference in USD",
     # caption = "95% confidence interval shown in red."
@@ -2167,21 +2044,21 @@ bootstrap_test_df |>
 ```{r}
 # test, control and combined lists
 
-test_p_mobile <- vans1_strat |>
+test_p_mobile <- cleaned_strat |>
   filter(test_group == "Test", device == "Mobile") |>
   select(purchase) |>
   as.list()
 
 test_p_mobile <- test_p_mobile[["purchase"]]
 
-control_p_mobile <- vans1_strat |>
+control_p_mobile <- cleaned_strat |>
   filter(test_group == "Control", device == "Mobile") |>
   select(purchase) |>
   as.list()
 
 control_p_mobile <- control_p_mobile[["purchase"]]
 
-combined_p_mobile <- vans1_strat |>
+combined_p_mobile <- cleaned_strat |>
   filter(device == "Mobile") |>
   select(purchase) |>
   as.list()
@@ -2314,7 +2191,7 @@ bootstrap_df |>
   ) +
   labs(
     title = "Difference in Conversion rate (Test - Control)",
-    subtitle = "Test - Control\n1000 Trials",
+    subtitle = "Test - Control/n1000 Trials",
     y = "Frequency",
     x = "Difference in Conversion Rate",
     # caption = "95% confidence interval shown in red."
@@ -2357,7 +2234,7 @@ bootstrap_test_df |>
 ```{r}
 # Check distribution of channels and landing page categories
 
-vans1_df |>
+cleaned_df |>
   filter(tracking_consent == 1) |>
   group_by(test_group, 
            landing_page_cat) |>
@@ -2378,7 +2255,7 @@ vans1_df |>
 # category by test group and a column with the minumum number of sessionsf
 # for each landing page category between test and control.
 
-sessions <- vans1_df |>
+sessions <- cleaned_df |>
   group_by(test_group, 
            landing_page_cat) |>
   summarize(
@@ -2402,7 +2279,7 @@ sessions <- vans1_df |>
 # counts between test and control.
 
 set.seed(105)
-vans1_strat <- vans1_df |>
+cleaned_strat <- cleaned_df |>
   left_join(sessions |> select(landing_page_cat, min), by = "landing_page_cat") |>
   filter(channel != "Mobile Push Notifications") |> 
   group_by(test_group,landing_page_cat) |>
@@ -2413,7 +2290,7 @@ vans1_strat <- vans1_df |>
 # Chart to check that session counts by landing page are equal between test
 # and control
 
-vans1_strat |>
+cleaned_strat |>
   group_by(landing_page_cat, test_group) |>
   summarize(sessions = n_distinct(session_id))|> 
   ggplot(aes(reorder(landing_page_cat, sessions), sessions, fill = test_group), ) +
@@ -2427,7 +2304,7 @@ vans1_strat |>
 
 # Summarize test and control groups
 
-vans1_strat_summary <- vans1_strat |>
+cleaned_strat_summary <- cleaned_strat |>
   filter(tracking_consent == 1) |>
   group_by(test_group, ) |>
   summarize(
@@ -2457,7 +2334,7 @@ vans1_strat_summary <- vans1_strat |>
 # Create data frame to show percent change and raw change between test and 
 # control groups for KPIs
 
-vans_change_strat <- vans1_strat_summary |>
+vans_change_strat <- cleaned_strat_summary |>
   select(
     test_group,
     cvr,
